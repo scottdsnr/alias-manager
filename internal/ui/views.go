@@ -51,6 +51,8 @@ func (m *Model) View() string {
 		return m.viewConfirm()
 	case screenHelp:
 		return m.viewHelp()
+	case screenMove:
+		return m.viewMoveForm()
 	default:
 		return m.viewList()
 	}
@@ -100,13 +102,23 @@ func (m *Model) viewList() string {
 		if i == m.cursor {
 			cur = cursorStyle.Render("▸ ")
 		}
+		box := ""
+		if m.moving {
+			box = "  "
+			if r.kind == rowAlias {
+				box = helpStyle.Render("☐ ")
+				if m.selected[r.node.Name] {
+					box = okStyle.Render("☑ ")
+				}
+			}
+		}
 		if r.kind == rowGroup {
 			marker := "▾"
 			if m.collapse[r.group] {
 				marker = "▸"
 			}
 			count := len(m.doc.Aliases(r.group))
-			b.WriteString(fmt.Sprintf("%s%s %s %s\n", cur, marker,
+			b.WriteString(fmt.Sprintf("%s%s%s %s %s\n", cur, box, marker,
 				groupStyle.Render(r.group), helpStyle.Render(fmt.Sprintf("(%d)", count))))
 			continue
 		}
@@ -119,13 +131,16 @@ func (m *Model) viewList() string {
 			name = disabledStyle.Render(pad(n.Name, 16))
 			cmd = disabledStyle.Render(truncate(n.Command, max(20, m.width-34)))
 		}
-		b.WriteString(fmt.Sprintf("%s    %s %s %s\n", cur, mark, name, cmd))
+		b.WriteString(fmt.Sprintf("%s  %s  %s %s %s\n", cur, box, mark, name, cmd))
 	}
 	if end < len(m.rows) {
 		b.WriteString(helpStyle.Render(fmt.Sprintf("    … %d more\n", len(m.rows)-end)))
 	}
 
-	return b.String() + m.footer("↑↓ move · enter fold/edit · a add · N new group · e edit · space on/off · d delete · / filter · s settings · ? help · q quit")
+	if m.moving {
+		return b.String() + m.footer(fmt.Sprintf("move mode · %d selected · space select · a select all · enter choose group · esc cancel", len(m.selected)))
+	}
+	return b.String() + m.footer("↑↓ move · enter fold/edit · a add · N new group · e edit · space on/off · d delete · / filter · m move · s settings · ? help · q quit")
 }
 
 func (m *Model) viewAliasForm() string {
@@ -190,6 +205,26 @@ func (m *Model) viewConfirm() string {
 		m.footer("y delete · n cancel")
 }
 
+func (m *Model) viewMoveForm() string {
+	f := &m.move
+	var b strings.Builder
+	for i, g := range f.groups {
+		cur := "  "
+		name := cmdStyle.Render(g)
+		if i == f.ix {
+			cur = cursorStyle.Render("▸ ")
+			name = groupStyle.Render(g)
+		}
+		b.WriteString(cur + name + "\n")
+	}
+	out := titleStyle.Render(fmt.Sprintf(" Move %d alias(es) to… ", f.count)) + "\n\n" +
+		boxStyle.Render(strings.TrimRight(b.String(), "\n")) + "\n"
+	if f.err != "" {
+		out += "\n" + errStyle.Render("✗ "+f.err) + "\n"
+	}
+	return out + m.footer("↑↓ pick group · N new group · enter move · esc back")
+}
+
 func (m *Model) viewSettings() string {
 	f := &m.settings
 	head := " Settings "
@@ -231,6 +266,7 @@ func (m *Model) viewHelp() string {
 		"  a          add alias       N          new group",
 		"  e          edit            d          delete",
 		"  space      enable/disable  /          filter",
+		"  m          move mode       (space select · enter pick group · esc cancel)",
 		"  r          reload file     s          settings",
 		"  q          quit            ?          this help",
 		"",

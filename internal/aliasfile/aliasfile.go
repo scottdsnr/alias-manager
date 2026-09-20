@@ -399,3 +399,46 @@ func ValidateName(name string) error {
 	}
 	return nil
 }
+
+// MoveToGroup moves the named aliases into group, keeping their relative file
+// order. Names that do not resolve to an alias are ignored.
+func (d *Doc) MoveToGroup(names []string, group string) error {
+	if strings.TrimSpace(group) == "" {
+		group = Ungrouped
+	}
+	if group != Ungrouped {
+		known := false
+		for _, g := range d.Groups() {
+			if g == group {
+				known = true
+			}
+		}
+		if !known {
+			if err := d.AddGroup(group); err != nil {
+				return err
+			}
+		}
+	}
+	want := map[string]bool{}
+	for _, n := range names {
+		want[n] = true
+	}
+	// Collect in file order so the moved block keeps its original sequence.
+	var moving []Node
+	for _, n := range d.Nodes {
+		if n.Kind == KindAlias && want[n.Name] && n.Group != group {
+			moving = append(moving, *n)
+		}
+	}
+	for _, n := range moving {
+		d.remove(n.Name)
+	}
+	for _, n := range moving {
+		node := n
+		node.Group = group
+		node.Raw = ""
+		d.insert(&node)
+	}
+	d.reflow()
+	return nil
+}

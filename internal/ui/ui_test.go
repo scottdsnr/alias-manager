@@ -239,3 +239,67 @@ func TestSettingsRejectsUnwritablePath(t *testing.T) {
 		t.Fatal("expected a path error")
 	}
 }
+
+const moveFixture = "alias ll='ls -l'\nalias la='ls -a'\n\n# ===== Git =====\nalias gs='git status'\n"
+
+func TestMoveModeMovesSelectedAliases(t *testing.T) {
+	m := newTestModel(t, moveFixture)
+	m = key(m, "m") // cursor is on the Ungrouped header
+	m = key(m, "down")
+	m = key(m, "space") // select ll, cursor advances
+	m = key(m, "space") // select la
+	if len(m.selected) != 2 {
+		t.Fatalf("want 2 selected, got %v", m.selected)
+	}
+	m = key(m, "enter") // group picker
+	if m.screen != screenMove {
+		t.Fatalf("want move picker, got screen %v", m.screen)
+	}
+	if m.move.groups[m.move.ix] != "Git" {
+		t.Fatalf("picker should start on the cursor's group, got %q", m.move.groups[m.move.ix])
+	}
+	m = key(m, "enter")
+	if m.moving || len(m.selected) != 0 {
+		t.Fatal("move mode should end after a move")
+	}
+	for _, n := range []string{"ll", "la"} {
+		if g := m.doc.Find(n).Group; g != "Git" {
+			t.Fatalf("%s in group %q, want Git", n, g)
+		}
+	}
+	out, err := os.ReadFile(m.cfg.AliasFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "# ===== Git =====\nalias gs='git status'\nalias ll='ls -l'\nalias la='ls -a'") {
+		t.Fatalf("unexpected file:\n%s", out)
+	}
+}
+
+func TestMoveModeEscCancels(t *testing.T) {
+	m := newTestModel(t, moveFixture)
+	m = key(m, "m")
+	m = key(m, "down")
+	m = key(m, "space")
+	next, _ := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = next.(*Model)
+	if m.moving || len(m.selected) != 0 {
+		t.Fatal("esc should leave move mode with nothing selected")
+	}
+	if g := m.doc.Find("ll").Group; g != "Ungrouped" {
+		t.Fatalf("alias moved despite cancel: %q", g)
+	}
+}
+
+func TestMoveModeGroupHeaderSelectsWholeGroup(t *testing.T) {
+	m := newTestModel(t, moveFixture)
+	m = key(m, "m")
+	m = key(m, "space") // on the Ungrouped header
+	if len(m.selected) != 2 {
+		t.Fatalf("want the whole group selected, got %v", m.selected)
+	}
+	m = key(m, "space") // toggles the group back off
+	if len(m.selected) != 0 {
+		t.Fatalf("want selection cleared, got %v", m.selected)
+	}
+}

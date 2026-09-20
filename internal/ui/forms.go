@@ -354,3 +354,64 @@ func (m *Model) submitSettings() (tea.Model, tea.Cmd) {
 	m.status = "settings saved · using " + short(path)
 	return m, nil
 }
+
+// ---------- move: destination group picker ----------
+
+type moveForm struct {
+	groups []string
+	ix     int
+	count  int
+	err    string
+}
+
+func (m *Model) openMoveForm() (tea.Model, tea.Cmd) {
+	f := moveForm{groups: m.groupNames(), count: len(m.selected)}
+	// Start on the group the cursor is sitting in, if it is a real choice.
+	if r := m.currentRow(); r != nil {
+		for i, g := range f.groups {
+			if g == r.group {
+				f.ix = i
+			}
+		}
+	}
+	m.move = f
+	m.screen = screenMove
+	return m, nil
+}
+
+func (m *Model) updateMoveForm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	f := &m.move
+	switch msg.String() {
+	case "esc":
+		// Back to move mode with the selection intact.
+		m.screen = screenList
+		return m, nil
+	case "ctrl+c":
+		m.quit = true
+		return m, tea.Quit
+	case "up", "k", "left":
+		f.ix = (f.ix - 1 + len(f.groups)) % len(f.groups)
+	case "down", "j", "right":
+		f.ix = (f.ix + 1) % len(f.groups)
+	case "N":
+		// Make a new group, then land the selection in it.
+		m.screen = screenList
+		return m.openGroupForm("")
+	case "enter":
+		if len(f.groups) == 0 {
+			return m, nil
+		}
+		group := f.groups[f.ix]
+		names := m.selectedNames()
+		if err := m.doc.MoveToGroup(names, group); err != nil {
+			f.err = err.Error()
+			return m, nil
+		}
+		m.moving = false
+		m.selected = map[string]bool{}
+		m.screen = screenList
+		m.rebuild()
+		return m, m.save(fmt.Sprintf("moved %d alias(es) to %s", len(names), group))
+	}
+	return m, nil
+}

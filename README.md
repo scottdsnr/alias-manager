@@ -59,6 +59,7 @@ Leave it blank to use the alias file.
 | `e` | edit alias or rename group |
 | `d` | delete (with confirmation) |
 | `space` | enable/disable alias |
+| `m` | move mode: `space` select (on a group header, the whole group), `a` select all, `enter` pick destination group, `esc` cancel |
 | `/` | filter |
 | `r` | reload from disk |
 | `s` | settings |

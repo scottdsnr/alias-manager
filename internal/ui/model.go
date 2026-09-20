@@ -23,6 +23,7 @@ const (
 	screenSettings
 	screenConfirm
 	screenHelp
+	screenMove
 )
 
 type rowKind int
@@ -52,6 +53,11 @@ type Model struct {
 	filter    textinput.Model
 	filtering bool
 
+	// move mode: multi-select aliases, then pick a destination group.
+	moving   bool
+	selected map[string]bool
+	move     moveForm
+
 	alias    aliasForm
 	group    groupForm
 	settings settingsForm
@@ -70,7 +76,7 @@ type Model struct {
 
 // New builds the model. firstRun forces the settings screen.
 func New(cfg *config.Config, firstRun bool) (*Model, error) {
-	m := &Model{cfg: cfg, collapse: map[string]bool{}, stale: map[string]bool{}, screen: screenList}
+	m := &Model{cfg: cfg, collapse: map[string]bool{}, stale: map[string]bool{}, selected: map[string]bool{}, screen: screenList}
 	f := textinput.New()
 	f.Prompt = "/"
 	f.CharLimit = 64
@@ -252,6 +258,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateSettings(msg)
 		case screenConfirm:
 			return m.updateConfirm(msg)
+		case screenMove:
+			return m.updateMoveForm(msg)
 		case screenHelp:
 			m.screen = screenList
 			return m, nil
@@ -278,6 +286,10 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.filter, cmd = m.filter.Update(msg)
 		m.rebuild()
 		return m, cmd
+	}
+
+	if m.moving {
+		return m.updateMoveMode(msg)
 	}
 
 	switch msg.String() {
@@ -345,10 +357,98 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "reloaded " + short(m.cfg.AliasFile)
 		}
+	case "m":
+		m.moving = true
+		m.selected = map[string]bool{}
+		if r := m.currentRow(); r != nil && r.kind == rowAlias {
+			m.selected[r.node.Name] = true
+		}
+		m.status = "move mode · space selects · enter picks a group · esc cancels"
 	case "?", "h":
 		m.screen = screenHelp
 	}
 	return m, nil
+}
+
+// updateMoveMode handles keys while aliases are being multi-selected.
+func (m *Model) updateMoveMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc", "q", "m":
+		m.moving = false
+		m.selected = map[string]bool{}
+		m.status = "move cancelled"
+	case "ctrl+c":
+		m.quit = true
+		return m, tea.Quit
+	case "up", "k":
+		m.cursor--
+		m.clampCursor()
+	case "down", "j":
+		m.cursor++
+		m.clampCursor()
+	case "home", "g":
+		m.cursor = 0
+	case "end", "G":
+		m.cursor = len(m.rows) - 1
+	case " ":
+		r := m.currentRow()
+		if r == nil {
+			break
+		}
+		if r.kind == rowAlias {
+			m.toggleSelected(r.node.Name)
+			m.cursor++
+			m.clampCursor()
+			break
+		}
+		// On a group header: select or clear the whole group at once.
+		aliases := m.doc.Aliases(r.group)
+		all := len(aliases) > 0
+		for _, n := range aliases {
+			if !m.selected[n.Name] {
+				all = false
+			}
+		}
+		for _, n := range aliases {
+			if all {
+				delete(m.selected, n.Name)
+			} else {
+				m.selected[n.Name] = true
+			}
+		}
+	case "a", "ctrl+a":
+		for _, r := range m.rows {
+			if r.kind == rowAlias {
+				m.selected[r.node.Name] = true
+			}
+		}
+	case "enter":
+		if len(m.selected) == 0 {
+			m.err = "select at least one alias with space"
+			return m, nil
+		}
+		return m.openMoveForm()
+	}
+	return m, nil
+}
+
+func (m *Model) toggleSelected(name string) {
+	if m.selected[name] {
+		delete(m.selected, name)
+		return
+	}
+	m.selected[name] = true
+}
+
+// selectedNames lists the selected aliases in file order.
+func (m *Model) selectedNames() []string {
+	var out []string
+	for _, n := range m.doc.Nodes {
+		if n.Kind == aliasfile.KindAlias && m.selected[n.Name] {
+			out = append(out, n.Name)
+		}
+	}
+	return out
 }
 
 // groupNames lists groups available for assignment, always including Ungrouped.

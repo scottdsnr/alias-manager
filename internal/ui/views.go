@@ -9,6 +9,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/scotthellings/alias-manager/internal/aliasfile"
+	"github.com/scotthellings/alias-manager/internal/config"
 	"github.com/scotthellings/alias-manager/internal/shell"
 )
 
@@ -239,7 +240,7 @@ func (m *Model) viewHelp() string {
 		"  the shell you launched it from, so to have aliases land in your current",
 		"  session, add this to your rc file and use " + nameStyle.Render("am") + ":",
 		"",
-		cmdStyle.Render(indent(shell.Wrapper("alias-manager", src))),
+		cmdStyle.Render(indent(shell.Wrapper("alias-manager", src, config.UnaliasPath()))),
 		"",
 		groupStyle.Render("File format"),
 		"  Groups are comments:   " + cmdStyle.Render("# ===== Git ====="),

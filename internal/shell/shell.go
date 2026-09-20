@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -67,11 +69,31 @@ func resolve(shellName string) (string, error) {
 
 func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 
+// WriteUnaliases records the alias names that must be removed from the live
+// shell before the alias file is re-sourced. Sourcing alone can only add or
+// overwrite aliases, so renames, deletes and disables would otherwise leave
+// the old definition active until a new shell is started. The wrapper sources
+// this file first, then the alias file, then clears it.
+func WriteUnaliases(path string, names []string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	var b strings.Builder
+	for _, n := range names {
+		if strings.TrimSpace(n) == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "unalias -- %s 2>/dev/null\n", quote(n))
+	}
+	return os.WriteFile(path, []byte(b.String()), 0o644)
+}
+
 // Wrapper returns the shell function the user should add to their rc file so
 // that saves take effect in the current shell immediately.
-func Wrapper(binary, sourceFile string) string {
+func Wrapper(binary, sourceFile, unaliasFile string) string {
 	return fmt.Sprintf(`am() {
   command %s "$@"
-  [ -f %s ] && . %s
-}`, binary, quote(sourceFile), quote(sourceFile))
+  if [ -s %s ]; then . %s; : > %s; fi
+  if [ -f %s ]; then . %s; fi
+}`, binary, quote(unaliasFile), quote(unaliasFile), quote(unaliasFile), quote(sourceFile), quote(sourceFile))
 }

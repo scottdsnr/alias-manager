@@ -98,7 +98,8 @@ which defines:
 ```sh
 am() {
   command alias-manager "$@"
-  [ -f '/home/you/.bash_aliases' ] && . '/home/you/.bash_aliases'
+  if [ -s '/home/you/.config/alias-manager/unalias.sh' ]; then . '/home/you/.config/alias-manager/unalias.sh'; : > '/home/you/.config/alias-manager/unalias.sh'; fi
+  if [ -f '/home/you/.bash_aliases' ]; then . '/home/you/.bash_aliases'; fi
 }
 ```
 

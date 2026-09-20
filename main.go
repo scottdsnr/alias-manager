@@ -64,7 +64,7 @@ func main() {
 		if src == "" {
 			fail(fmt.Errorf("not configured yet — run alias-manager first"))
 		}
-		fmt.Println(shell.Wrapper("alias-manager", src))
+		fmt.Println(shell.Wrapper("alias-manager", src, config.UnaliasPath()))
 		return
 	}
 

@@ -31,6 +31,10 @@ func Dir() string {
 
 func Path() string { return filepath.Join(Dir(), "config.json") }
 
+// UnaliasPath is the scratch file of `unalias` lines the shell wrapper runs
+// before re-sourcing, so removed or renamed aliases leave the live shell.
+func UnaliasPath() string { return filepath.Join(Dir(), "unalias.sh") }
+
 // Load reads the config. It returns a zero-valued Config with ok=false when no
 // config exists yet, which is the signal to run first-time setup.
 func Load() (*Config, bool, error) {

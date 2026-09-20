@@ -57,6 +57,10 @@ type Model struct {
 	settings settingsForm
 	confirm  confirmPrompt
 
+	// stale collects alias names that must be unaliased from the live shell
+	// on exit: anything renamed, deleted or disabled during this session.
+	stale map[string]bool
+
 	status string
 	err    string
 	width  int
@@ -66,7 +70,7 @@ type Model struct {
 
 // New builds the model. firstRun forces the settings screen.
 func New(cfg *config.Config, firstRun bool) (*Model, error) {
-	m := &Model{cfg: cfg, collapse: map[string]bool{}, screen: screenList}
+	m := &Model{cfg: cfg, collapse: map[string]bool{}, stale: map[string]bool{}, screen: screenList}
 	f := textinput.New()
 	f.Prompt = "/"
 	f.CharLimit = 64
@@ -162,7 +166,12 @@ type savedMsg struct {
 // save writes the document, validates it and re-sources it.
 func (m *Model) save(note string) tea.Cmd {
 	doc, cfg := m.doc, m.cfg
+	m.markStale()
+	stale := m.staleNames()
 	return func() tea.Msg {
+		if err := shell.WriteUnaliases(config.UnaliasPath(), stale); err != nil {
+			return savedMsg{err: err}
+		}
 		if err := doc.Save(); err != nil {
 			return savedMsg{err: err}
 		}
@@ -178,6 +187,37 @@ func (m *Model) save(note string) tea.Cmd {
 		}
 		return savedMsg{note: note + " · sourced " + short(src)}
 	}
+}
+
+// markStale records every alias name that is on disk now but will not be an
+// enabled alias after this save — the ones sourcing cannot clear by itself.
+func (m *Model) markStale() {
+	live := map[string]bool{}
+	if old, err := aliasfile.Load(m.cfg.AliasFile); err == nil {
+		for _, n := range old.Nodes {
+			if n.Kind == aliasfile.KindAlias && n.Enabled {
+				live[n.Name] = true
+			}
+		}
+	}
+	for _, n := range m.doc.Nodes {
+		if n.Kind == aliasfile.KindAlias && n.Enabled {
+			delete(live, n.Name)
+			delete(m.stale, n.Name)
+		}
+	}
+	for name := range live {
+		m.stale[name] = true
+	}
+}
+
+func (m *Model) staleNames() []string {
+	out := make([]string, 0, len(m.stale))
+	for n := range m.stale {
+		out = append(out, n)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func short(p string) string {

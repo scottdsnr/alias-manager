@@ -45,8 +45,38 @@ func TestSourceRunsTheFile(t *testing.T) {
 }
 
 func TestWrapperQuotesPath(t *testing.T) {
-	w := Wrapper("alias-manager", "/home/a b/.bash_aliases")
+	w := Wrapper("alias-manager", "/home/a b/.bash_aliases", "/home/a b/unalias.sh")
 	if !strings.Contains(w, `'/home/a b/.bash_aliases'`) || !strings.Contains(w, "command alias-manager") {
 		t.Fatalf("got:\n%s", w)
+	}
+	if !strings.Contains(w, `'/home/a b/unalias.sh'`) {
+		t.Fatalf("wrapper must run the unalias file:\n%s", w)
+	}
+}
+
+// The wrapper must clear stale aliases before re-sourcing, otherwise a rename
+// or delete leaves the old alias live in the current shell.
+func TestWrapperUnaliasesBeforeSourcing(t *testing.T) {
+	w := Wrapper("alias-manager", "/tmp/aliases", "/tmp/unalias.sh")
+	if strings.Index(w, "/tmp/unalias.sh") > strings.Index(w, "/tmp/aliases") {
+		t.Fatalf("unalias file must be sourced first:\n%s", w)
+	}
+}
+
+func TestWriteUnaliases(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "sub", "unalias.sh")
+	if err := WriteUnaliases(p, []string{"gs", "", "it's"}); err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := string(b)
+	if !strings.Contains(got, "unalias -- 'gs'") || strings.Count(got, "unalias") != 2 {
+		t.Fatalf("got:\n%s", got)
+	}
+	if !strings.Contains(got, `'it'\''s'`) {
+		t.Fatalf("name not quoted:\n%s", got)
 	}
 }

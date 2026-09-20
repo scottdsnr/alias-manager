@@ -75,15 +75,27 @@ func quote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + 
 // the old definition active until a new shell is started. The wrapper sources
 // this file first, then the alias file, then clears it.
 func WriteUnaliases(path string, names []string) error {
+	return WriteCleanup(path, names, nil)
+}
+
+// WriteCleanup is WriteUnaliases plus the function names that must be unset,
+// for functions that were renamed, deleted or disabled.
+func WriteCleanup(path string, aliases, funcs []string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
 	var b strings.Builder
-	for _, n := range names {
+	for _, n := range aliases {
 		if strings.TrimSpace(n) == "" {
 			continue
 		}
 		fmt.Fprintf(&b, "unalias -- %s 2>/dev/null\n", quote(n))
+	}
+	for _, n := range funcs {
+		if strings.TrimSpace(n) == "" {
+			continue
+		}
+		fmt.Fprintf(&b, "unset -f %s 2>/dev/null\n", quote(n))
 	}
 	return os.WriteFile(path, []byte(b.String()), 0o644)
 }

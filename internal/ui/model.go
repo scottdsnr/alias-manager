@@ -24,13 +24,24 @@ const (
 	screenConfirm
 	screenHelp
 	screenMove
+	screenFunc
 )
+
+// The two tabs of the list screen.
+const (
+	tabAliases = iota
+	tabFuncs
+	tabCount
+)
+
+var tabNames = [tabCount]string{"Aliases", "Functions"}
 
 type rowKind int
 
 const (
 	rowGroup rowKind = iota
 	rowAlias
+	rowFunc
 )
 
 type row struct {
@@ -46,8 +57,10 @@ type Model struct {
 
 	screen   screen
 	prev     screen
+	tab      int
 	rows     []row
 	cursor   int
+	cursors  [tabCount]int
 	collapse map[string]bool
 
 	filter    textinput.Model
@@ -59,6 +72,7 @@ type Model struct {
 	move     moveForm
 
 	alias    aliasForm
+	fn       funcForm
 	group    groupForm
 	settings settingsForm
 	confirm  confirmPrompt
@@ -66,6 +80,8 @@ type Model struct {
 	// stale collects alias names that must be unaliased from the live shell
 	// on exit: anything renamed, deleted or disabled during this session.
 	stale map[string]bool
+	// staleFn is the same for functions, which need `unset -f` instead.
+	staleFn map[string]bool
 
 	status string
 	err    string
@@ -77,7 +93,7 @@ type Model struct {
 // New builds the model. firstRun forces the settings screen.
 func New(cfg *config.Config, firstRun bool) (*Model, error) {
 	applyColor(cfg.Color)
-	m := &Model{cfg: cfg, collapse: map[string]bool{}, stale: map[string]bool{}, selected: map[string]bool{}, screen: screenList}
+	m := &Model{cfg: cfg, collapse: map[string]bool{}, stale: map[string]bool{}, staleFn: map[string]bool{}, selected: map[string]bool{}, screen: screenList}
 	f := textinput.New()
 	f.Prompt = "/"
 	f.CharLimit = 64
@@ -105,45 +121,88 @@ func (m *Model) reload() error {
 	return nil
 }
 
-// rebuild flattens the document into the visible row list.
+// rebuild flattens the document into the visible row list for the active tab.
 func (m *Model) rebuild() {
 	prev := m.currentRow()
 	m.rows = nil
 	q := strings.ToLower(strings.TrimSpace(m.filter.Value()))
+	kind := rowAlias
+	if m.tab == tabFuncs {
+		kind = rowFunc
+	}
 	for _, g := range m.doc.Groups() {
-		aliases := m.doc.Aliases(g)
+		items := m.doc.Aliases(g)
+		if m.tab == tabFuncs {
+			items = m.doc.Functions(g)
+		}
 		if q != "" {
 			var keep []*aliasfile.Node
-			for _, n := range aliases {
+			for _, n := range items {
 				if strings.Contains(strings.ToLower(n.Name), q) ||
 					strings.Contains(strings.ToLower(n.Command), q) ||
+					strings.Contains(strings.ToLower(n.Body), q) ||
 					strings.Contains(strings.ToLower(g), q) {
 					keep = append(keep, n)
 				}
 			}
-			aliases = keep
-			if len(aliases) == 0 {
-				continue
-			}
+			items = keep
 		}
-		m.rows = append(m.rows, row{kind: rowGroup, group: g})
-		if m.collapse[g] && q == "" {
+		if len(items) == 0 && (q != "" || m.tab == tabFuncs) {
 			continue
 		}
-		for _, n := range aliases {
-			m.rows = append(m.rows, row{kind: rowAlias, group: g, node: n})
+		m.rows = append(m.rows, row{kind: rowGroup, group: g})
+		if m.collapse[m.collapseKey(g)] && q == "" {
+			continue
+		}
+		for _, n := range items {
+			m.rows = append(m.rows, row{kind: kind, group: g, node: n})
 		}
 	}
-	// Keep the cursor on the same alias across a rebuild where possible.
-	if prev != nil && prev.kind == rowAlias {
+	// Keep the cursor on the same entry across a rebuild where possible.
+	if prev != nil && prev.kind != rowGroup {
 		for i, r := range m.rows {
-			if r.kind == rowAlias && r.node.Name == prev.node.Name {
+			if r.kind == prev.kind && r.node.Name == prev.node.Name {
 				m.cursor = i
 				return
 			}
 		}
 	}
 	m.clampCursor()
+}
+
+// collapseKey namespaces fold state per tab, so folding a group of aliases
+// does not fold the same group over on the functions tab.
+func (m *Model) collapseKey(group string) string {
+	return fmt.Sprintf("%d\x00%s", m.tab, group)
+}
+
+// switchTab moves to tab t, remembering where the cursor sat on each.
+func (m *Model) switchTab(t int) {
+	if t == m.tab || t < 0 || t >= tabCount {
+		return
+	}
+	m.cursors[m.tab] = m.cursor
+	m.tab = t
+	m.cursor = m.cursors[t]
+	m.moving = false
+	m.selected = map[string]bool{}
+	m.rebuild()
+}
+
+// entryCount reports how many aliases or functions a tab holds, for the
+// counts shown in the tab bar.
+func (m *Model) entryCount(tab int) int {
+	want := aliasfile.KindAlias
+	if tab == tabFuncs {
+		want = aliasfile.KindFunc
+	}
+	n := 0
+	for _, node := range m.doc.Nodes {
+		if node.Kind == want {
+			n++
+		}
+	}
+	return n
 }
 
 func (m *Model) clampCursor() {
@@ -174,9 +233,9 @@ type savedMsg struct {
 func (m *Model) save(note string) tea.Cmd {
 	doc, cfg := m.doc, m.cfg
 	m.markStale()
-	stale := m.staleNames()
+	stale, staleFn := m.staleNames(m.stale), m.staleNames(m.staleFn)
 	return func() tea.Msg {
-		if err := shell.WriteUnaliases(config.UnaliasPath(), stale); err != nil {
+		if err := shell.WriteCleanup(config.UnaliasPath(), stale, staleFn); err != nil {
 			return savedMsg{err: err}
 		}
 		if err := doc.Save(); err != nil {
@@ -196,31 +255,48 @@ func (m *Model) save(note string) tea.Cmd {
 	}
 }
 
-// markStale records every alias name that is on disk now but will not be an
-// enabled alias after this save — the ones sourcing cannot clear by itself.
+// markStale records every alias and function name that is on disk now but
+// will not be live after this save — the ones sourcing cannot clear by
+// itself, because sourcing can only add or overwrite definitions.
 func (m *Model) markStale() {
-	live := map[string]bool{}
+	liveAlias, liveFunc := map[string]bool{}, map[string]bool{}
 	if old, err := aliasfile.Load(m.cfg.AliasFile); err == nil {
 		for _, n := range old.Nodes {
-			if n.Kind == aliasfile.KindAlias && n.Enabled {
-				live[n.Name] = true
+			if !n.Enabled {
+				continue
+			}
+			switch n.Kind {
+			case aliasfile.KindAlias:
+				liveAlias[n.Name] = true
+			case aliasfile.KindFunc:
+				liveFunc[n.Name] = true
 			}
 		}
 	}
 	for _, n := range m.doc.Nodes {
-		if n.Kind == aliasfile.KindAlias && n.Enabled {
-			delete(live, n.Name)
+		if !n.Enabled {
+			continue
+		}
+		switch n.Kind {
+		case aliasfile.KindAlias:
+			delete(liveAlias, n.Name)
 			delete(m.stale, n.Name)
+		case aliasfile.KindFunc:
+			delete(liveFunc, n.Name)
+			delete(m.staleFn, n.Name)
 		}
 	}
-	for name := range live {
+	for name := range liveAlias {
 		m.stale[name] = true
+	}
+	for name := range liveFunc {
+		m.staleFn[name] = true
 	}
 }
 
-func (m *Model) staleNames() []string {
-	out := make([]string, 0, len(m.stale))
-	for n := range m.stale {
+func (m *Model) staleNames(set map[string]bool) []string {
+	out := make([]string, 0, len(set))
+	for n := range set {
 		out = append(out, n)
 	}
 	sort.Strings(out)
@@ -261,6 +337,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m.updateConfirm(msg)
 		case screenMove:
 			return m.updateMoveForm(msg)
+		case screenFunc:
+			return m.updateFuncForm(msg)
 		case screenHelp:
 			m.screen = screenList
 			return m, nil
@@ -297,6 +375,10 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "q", "ctrl+c":
 		m.quit = true
 		return m, tea.Quit
+	case "1":
+		m.switchTab(tabAliases)
+	case "2":
+		m.switchTab(tabFuncs)
 	case "up", "k":
 		m.cursor--
 		m.clampCursor()
@@ -316,30 +398,44 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.filter.SetValue("")
 			m.rebuild()
 		}
-	case "tab", "enter":
-		if r := m.currentRow(); r != nil && r.kind == rowGroup {
-			m.collapse[r.group] = !m.collapse[r.group]
-			m.rebuild()
-		} else if r != nil {
-			return m.openAliasForm(r.node)
+	case "tab":
+		m.switchTab((m.tab + 1) % tabCount)
+	case "shift+tab":
+		m.switchTab((m.tab - 1 + tabCount) % tabCount)
+	case "enter":
+		r := m.currentRow()
+		if r == nil {
+			break
 		}
+		if r.kind == rowGroup {
+			key := m.collapseKey(r.group)
+			m.collapse[key] = !m.collapse[key]
+			m.rebuild()
+			break
+		}
+		return m.openEntryForm(r.node)
 	case "a", "n":
+		if m.tab == tabFuncs {
+			return m.openFuncForm(nil)
+		}
 		return m.openAliasForm(nil)
 	case "e":
 		if r := m.currentRow(); r != nil {
-			if r.kind == rowAlias {
-				return m.openAliasForm(r.node)
+			if r.kind == rowGroup {
+				return m.openGroupForm(r.group)
 			}
-			return m.openGroupForm(r.group)
+			return m.openEntryForm(r.node)
 		}
 	case "c":
 		if r := m.currentRow(); r != nil && r.kind == rowAlias {
 			return m.openDuplicateForm(r.node)
+		} else if r != nil && r.kind == rowFunc {
+			return m.openDuplicateFuncForm(r.node)
 		}
 	case "N":
 		return m.openGroupForm("")
 	case " ":
-		if r := m.currentRow(); r != nil && r.kind == rowAlias {
+		if r := m.currentRow(); r != nil && r.kind != rowGroup {
 			r.node.Enabled = !r.node.Enabled
 			state := "enabled"
 			if !r.node.Enabled {
@@ -363,6 +459,10 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "reloaded " + short(m.cfg.AliasFile)
 		}
 	case "m":
+		if m.tab != tabAliases {
+			m.err = "move mode is for aliases"
+			break
+		}
 		m.moving = true
 		m.selected = map[string]bool{}
 		if r := m.currentRow(); r != nil && r.kind == rowAlias {

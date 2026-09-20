@@ -1,8 +1,8 @@
 # alias-manager
 
-A bubbletea TUI for your shell aliases. View, create, edit, delete, group and
-enable/disable aliases in bash or zsh, writing straight to the file you already
-keep them in.
+A bubbletea TUI for your shell aliases and functions. View, create, edit,
+delete, group and enable/disable them in bash or zsh, writing straight to the
+file you already keep them in. Two tabs: `1` for aliases, `2` for functions.
 
 ## Install
 
@@ -56,14 +56,15 @@ Leave it blank to use the alias file.
 | key | action |
 |---|---|
 | `↑`/`↓`, `k`/`j` | move |
-| `enter`/`tab` | fold a group / edit an alias |
-| `a` | add alias |
+| `1` / `2` | aliases tab / functions tab (`tab` cycles) |
+| `enter` | fold a group / edit the entry under the cursor |
+| `a` | add an alias or function, depending on the tab |
 | `N` | new group |
-| `e` | edit alias or rename group |
-| `c` | duplicate an alias (opens the edit screen pre-filled) |
+| `e` | edit entry or rename group |
+| `c` | duplicate an entry (opens the edit screen pre-filled) |
 | `d` | delete (with confirmation) |
-| `space` | enable/disable alias |
-| `m` | move mode: `space` select (on a group header, the whole group), `a` select all, `enter` pick destination group, `esc` cancel |
+| `space` | enable/disable |
+| `m` | move mode (aliases tab): `space` select (on a group header, the whole group), `a` select all, `enter` pick destination group, `esc` cancel |
 | `/` | filter |
 | `r` | reload from disk |
 | `s` | settings |
@@ -72,6 +73,24 @@ Leave it blank to use the alias file.
 
 In the alias form, `←`/`→` moves the alias between groups and `ctrl+e` toggles
 enabled/disabled.
+
+### Function editor
+
+The body is a multi-line editor, so `enter` inserts a newline and `tab` indents
+by four spaces. Moving between fields and saving therefore use:
+
+| key | action |
+|---|---|
+| `ctrl+n` / `ctrl+p` | next / previous field (`shift+tab` also goes back) |
+| `tab` | indent four spaces (inside the body) |
+| `enter` | newline inside the body; saves from any other field |
+| `ctrl+s` | save from anywhere |
+| `←`/`→` | move the function between groups (on the group field) |
+| `ctrl+e` | enable/disable |
+| `esc` | cancel |
+
+Aliases and functions have separate namespaces, so an alias and a function may
+share a name.
 
 ## File format
 
@@ -83,14 +102,28 @@ alias gs='git status'
 #!alias gco='git checkout'
 ```
 
+Functions are read and written whole, with their comment on the header line:
+
+```sh
+# ===== Git =====
+gsync() { # pull, then push
+    git pull --rebase
+    git push
+}
+```
+
 A disabled alias keeps the `#!` sentinel so it survives round-trips and can be
-re-enabled. Everything else in the file — exports, functions, your own comments
-— is preserved untouched. Every save writes a `.bak` beside the file.
+re-enabled; a disabled function carries it on every one of its lines. Both
+`name() {` and `function name {` styles are recognised and round-tripped.
+Everything else in the file — exports, control flow, your own comments — is
+preserved untouched. Every save writes a `.bak` beside the file.
 
 ## Sourcing
 
 After each change the file is written, syntax-checked with `bash -n`/`zsh -n`,
-and sourced in a subshell to prove it loads cleanly. **A child process cannot
+and sourced in a subshell to prove it loads cleanly. Renamed, deleted or
+disabled entries are queued as `unalias`/`unset -f` lines that the wrapper runs
+before re-sourcing, since sourcing alone can only add definitions. **A child process cannot
 modify the shell that launched it**, so to have changes take effect in the
 session you are typing in, add the wrapper to your rc file:
 

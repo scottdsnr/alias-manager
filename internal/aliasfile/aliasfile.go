@@ -28,6 +28,7 @@ const (
 	KindRaw Kind = iota
 	KindGroup
 	KindAlias
+	KindFunc
 )
 
 // Node is one line of the document.
@@ -37,12 +38,21 @@ type Node struct {
 
 	Group string // for KindGroup: its name. For KindAlias: owning group.
 
-	Name    string // alias name
+	Name    string // alias or function name
 	Command string // alias body, unquoted
 	Enabled bool
-	Comment string // trailing comment on the alias line, if any
+	Comment string // trailing comment on the alias/function header line, if any
 	Indent  string
 	quote   byte // original quote char, so we round-trip faithfully
+
+	// Body holds the lines between the braces of a KindFunc, verbatim and
+	// without the enclosing "name() {" / "}" lines.
+	Body string
+	// keyword records that the function was written as "function name()",
+	// so we round-trip the author's style.
+	keyword bool
+	// noParens records "function name {" — legal only with the keyword.
+	noParens bool
 }
 
 // Doc is a parsed alias file.
@@ -54,6 +64,8 @@ type Doc struct {
 var (
 	aliasRe = regexp.MustCompile(`^(\s*)alias\s+(-[a-zA-Z]+\s+)?([^\s=]+)=(.*)$`)
 	groupRe = regexp.MustCompile(`^#\s*=====\s*(.*?)\s*=====\s*$`)
+	funcRe  = regexp.MustCompile(`^(\s*)(function\s+)?([A-Za-z_][A-Za-z0-9_.\-]*)\s*(\(\s*\))?\s*\{\s*(#.*)?$`)
+	endRe   = regexp.MustCompile(`^\s*\}\s*;?\s*$`)
 )
 
 // Load reads path into a Doc. A missing file parses as an empty document.
@@ -68,11 +80,19 @@ func Load(path string) (*Doc, error) {
 	}
 	defer f.Close()
 
-	group := Ungrouped
+	var lines []string
 	sc := bufio.NewScanner(f)
 	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
 	for sc.Scan() {
-		line := strings.TrimRight(sc.Text(), "\r")
+		lines = append(lines, strings.TrimRight(sc.Text(), "\r"))
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+
+	group := Ungrouped
+	for i := 0; i < len(lines); i++ {
+		line := lines[i]
 		if m := groupRe.FindStringSubmatch(line); m != nil {
 			group = m[1]
 			d.Nodes = append(d.Nodes, &Node{Kind: KindGroup, Group: group, Raw: line})
@@ -83,9 +103,73 @@ func Load(path string) (*Doc, error) {
 			d.Nodes = append(d.Nodes, n)
 			continue
 		}
+		if n, next := parseFunc(lines, i); n != nil {
+			n.Group = group
+			d.Nodes = append(d.Nodes, n)
+			i = next
+			continue
+		}
 		d.Nodes = append(d.Nodes, &Node{Kind: KindRaw, Raw: line})
 	}
-	return d, sc.Err()
+	return d, nil
+}
+
+// uncomment strips the disabled marker from a line, reporting whether it was
+// there. Managed-but-disabled content keeps "#!" on every one of its lines.
+func uncomment(line string) (string, bool) {
+	t := strings.TrimSpace(line)
+	if !strings.HasPrefix(t, disabledPrefix) {
+		return line, false
+	}
+	idx := strings.Index(line, disabledPrefix)
+	return line[:idx] + line[idx+len(disabledPrefix):], true
+}
+
+// parseFunc tries to read a shell function starting at lines[i]. It returns
+// the node and the index of its closing brace, or nil if this is not one.
+func parseFunc(lines []string, i int) (*Node, int) {
+	head, disabled := uncomment(lines[i])
+	m := funcRe.FindStringSubmatch(head)
+	if m == nil {
+		return nil, i
+	}
+	keyword, parens := m[2] != "", m[4] != ""
+	// "name {" without either marker is a brace block, not a function.
+	if !keyword && !parens {
+		return nil, i
+	}
+	var body []string
+	for j := i + 1; j < len(lines); j++ {
+		raw := lines[j]
+		if disabled {
+			var off bool
+			raw, off = uncomment(raw)
+			// A disabled function keeps "#!" to its closing brace; a bare
+			// line means we ran past the end of the managed block.
+			if !off && strings.TrimSpace(raw) != "" {
+				return nil, i
+			}
+		}
+		if endRe.MatchString(raw) {
+			comment := ""
+			if m[5] != "" {
+				comment = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m[5]), "#"))
+			}
+			return &Node{
+				Kind:     KindFunc,
+				Raw:      lines[i],
+				Name:     m[3],
+				Body:     strings.Join(body, "\n"),
+				Enabled:  !disabled,
+				Comment:  comment,
+				Indent:   m[1],
+				keyword:  keyword,
+				noParens: keyword && !parens,
+			}, j
+		}
+		body = append(body, raw)
+	}
+	return nil, i
 }
 
 func parseAlias(line string) *Node {
@@ -145,6 +229,8 @@ func (d *Doc) Render() string {
 			b.WriteString(groupPrefix + n.Group + groupSuffix)
 		case KindAlias:
 			b.WriteString(n.Line())
+		case KindFunc:
+			b.WriteString(n.Lines())
 		default:
 			b.WriteString(n.Raw)
 		}
@@ -172,6 +258,35 @@ func (n *Node) Line() string {
 		b.WriteString(" # " + n.Comment)
 	}
 	return b.String()
+}
+
+// Lines renders a function as its full multi-line definition.
+func (n *Node) Lines() string {
+	head := n.Name + "()"
+	if n.keyword {
+		head = "function " + n.Name + "()"
+		if n.noParens {
+			head = "function " + n.Name
+		}
+	}
+	head += " {"
+	if n.Comment != "" {
+		head += " # " + n.Comment
+	}
+	out := []string{n.Indent + head}
+	// Body lines carry their own indentation, exactly as typed.
+	out = append(out, strings.Split(n.Body, "\n")...)
+	out = append(out, n.Indent+"}")
+	if !n.Enabled {
+		for i, l := range out {
+			// Keep blank lines blank so the file stays readable.
+			if strings.TrimSpace(l) == "" {
+				continue
+			}
+			out[i] = disabledPrefix + l
+		}
+	}
+	return strings.Join(out, "\n")
 }
 
 // Save writes the document atomically, keeping a .bak of the previous content.
@@ -205,7 +320,7 @@ func (d *Doc) Groups() []string {
 		}
 	}
 	for _, n := range d.Nodes {
-		if n.Kind == KindAlias && n.Group == Ungrouped {
+		if (n.Kind == KindAlias || n.Kind == KindFunc) && n.Group == Ungrouped {
 			add(Ungrouped)
 		}
 	}
@@ -226,6 +341,27 @@ func (d *Doc) Aliases(group string) []*Node {
 		}
 	}
 	return out
+}
+
+// Functions returns the functions in a group, in file order.
+func (d *Doc) Functions(group string) []*Node {
+	var out []*Node
+	for _, n := range d.Nodes {
+		if n.Kind == KindFunc && n.Group == group {
+			out = append(out, n)
+		}
+	}
+	return out
+}
+
+// FindFunc returns the node for a function name, or nil.
+func (d *Doc) FindFunc(name string) *Node {
+	for _, n := range d.Nodes {
+		if n.Kind == KindFunc && n.Name == name {
+			return n
+		}
+	}
+	return nil
 }
 
 // Find returns the node for an alias name, or nil.
@@ -281,7 +417,7 @@ func (d *Doc) DeleteGroup(group string, withAliases bool) {
 		switch {
 		case n.Kind == KindGroup && n.Group == group:
 			continue
-		case n.Kind == KindAlias && n.Group == group:
+		case (n.Kind == KindAlias || n.Kind == KindFunc) && n.Group == group:
 			if withAliases {
 				continue
 			}
@@ -327,9 +463,44 @@ func (d *Doc) Upsert(oldName string, n Node) error {
 // Delete removes an alias.
 func (d *Doc) Delete(name string) { d.remove(name); d.reflow() }
 
-func (d *Doc) remove(name string) {
+// DeleteFunc removes a function.
+func (d *Doc) DeleteFunc(name string) { d.removeKind(KindFunc, name); d.reflow() }
+
+// UpsertFunc creates or updates a shell function, placing it at the end of
+// its group. Body is the text between the braces, verbatim.
+func (d *Doc) UpsertFunc(oldName string, n Node) error {
+	if err := ValidateFuncName(n.Name); err != nil {
+		return err
+	}
+	if strings.TrimSpace(n.Body) == "" {
+		return fmt.Errorf("function body cannot be empty")
+	}
+	if n.Group == "" {
+		n.Group = Ungrouped
+	}
+	if ex := d.FindFunc(n.Name); ex != nil && n.Name != oldName {
+		return fmt.Errorf("function %q already exists", n.Name)
+	}
+	if oldName != "" {
+		if ex := d.FindFunc(oldName); ex != nil {
+			group := ex.Group
+			ex.Name, ex.Body, ex.Enabled, ex.Comment = n.Name, n.Body, n.Enabled, n.Comment
+			if group == n.Group {
+				return nil
+			}
+			d.removeKind(KindFunc, oldName)
+		}
+	}
+	node := &Node{Kind: KindFunc, Name: n.Name, Body: n.Body, Enabled: n.Enabled, Comment: n.Comment, Group: n.Group}
+	d.insert(node)
+	return nil
+}
+
+func (d *Doc) remove(name string) { d.removeKind(KindAlias, name) }
+
+func (d *Doc) removeKind(kind Kind, name string) {
 	for i, n := range d.Nodes {
-		if n.Kind == KindAlias && n.Name == name {
+		if n.Kind == kind && n.Name == name {
 			d.Nodes = append(d.Nodes[:i], d.Nodes[i+1:]...)
 			return
 		}
@@ -357,7 +528,7 @@ func (d *Doc) insert(node *Node) {
 			inGroup, last = true, i
 		case n.Kind == KindGroup:
 			inGroup = false
-		case inGroup && n.Kind == KindAlias:
+		case inGroup && (n.Kind == KindAlias || n.Kind == KindFunc):
 			last = i
 		}
 	}
@@ -396,6 +567,20 @@ func ValidateName(name string) error {
 	}
 	if !nameRe.MatchString(name) {
 		return fmt.Errorf("invalid alias name %q", name)
+	}
+	return nil
+}
+
+var funcNameRe = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.\-]*$`)
+
+// ValidateFuncName rejects names the shell would not accept for a function.
+func ValidateFuncName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("function name cannot be empty")
+	}
+	if !funcNameRe.MatchString(name) {
+		return fmt.Errorf("invalid function name %q", name)
 	}
 	return nil
 }

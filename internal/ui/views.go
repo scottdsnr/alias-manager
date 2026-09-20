@@ -53,6 +53,8 @@ func (m *Model) View() string {
 		return m.viewHelp()
 	case screenMove:
 		return m.viewMoveForm()
+	case screenFunc:
+		return m.viewFuncForm()
 	default:
 		return m.viewList()
 	}
@@ -73,13 +75,18 @@ func (m *Model) footer(keys string) string {
 func (m *Model) viewList() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(" alias manager ") + "  " + helpStyle.Render(short(m.cfg.AliasFile)+" · "+m.cfg.Shell) + "\n\n")
+	b.WriteString(m.viewTabs() + "\n\n")
 
 	if m.filtering || m.filter.Value() != "" {
 		b.WriteString(m.filter.View() + "\n\n")
 	}
 
 	if len(m.rows) == 0 {
-		b.WriteString(helpStyle.Render("  no aliases yet — press a to add one, N to make a group\n"))
+		if m.tab == tabFuncs {
+			b.WriteString(helpStyle.Render("  no functions yet — press a to add one\n"))
+		} else {
+			b.WriteString(helpStyle.Render("  no aliases yet — press a to add one, N to make a group\n"))
+		}
 	}
 
 	// Keep the cursor row visible in a simple sliding window.
@@ -118,18 +125,25 @@ func (m *Model) viewList() string {
 				marker = "▸"
 			}
 			count := len(m.doc.Aliases(r.group))
+			if m.tab == tabFuncs {
+				count = len(m.doc.Functions(r.group))
+			}
 			b.WriteString(fmt.Sprintf("%s%s%s %s %s\n", cur, box, marker,
 				groupStyle.Render(r.group), helpStyle.Render(fmt.Sprintf("(%d)", count))))
 			continue
 		}
 		n := r.node
+		label, body := n.Name, n.Command
+		if r.kind == rowFunc {
+			label, body = n.Name+"()", summary(n.Body)
+		}
 		mark := okStyle.Render("●")
-		name := nameStyle.Render(pad(n.Name, 16))
-		cmd := cmdStyle.Render(truncate(n.Command, max(20, m.width-34)))
+		name := nameStyle.Render(pad(label, 16))
+		cmd := cmdStyle.Render(truncate(body, max(20, m.width-34)))
 		if !n.Enabled {
 			mark = helpStyle.Render("○")
-			name = disabledStyle.Render(pad(n.Name, 16))
-			cmd = disabledStyle.Render(truncate(n.Command, max(20, m.width-34)))
+			name = disabledStyle.Render(pad(label, 16))
+			cmd = disabledStyle.Render(truncate(body, max(20, m.width-34)))
 		}
 		b.WriteString(fmt.Sprintf("%s  %s  %s %s %s\n", cur, box, mark, name, cmd))
 	}
@@ -140,7 +154,75 @@ func (m *Model) viewList() string {
 	if m.moving {
 		return b.String() + m.footer(fmt.Sprintf("move mode · %d selected · space select · a select all · enter choose group · esc cancel", len(m.selected)))
 	}
-	return b.String() + m.footer("↑↓ move · enter fold/edit · a add · N new group · e edit · c duplicate · space on/off · d delete · / filter · m move · s settings · ? help · q quit")
+	keys := "↑↓ move · 1/2 tab · enter fold/edit · a add · N new group · e edit · c duplicate · space on/off · d delete · / filter · m move · s settings · ? help · q quit"
+	if m.tab == tabFuncs {
+		keys = "↑↓ move · 1/2 tab · enter fold/edit · a add function · e edit · c duplicate · space on/off · d delete · / filter · s settings · ? help · q quit"
+	}
+	return b.String() + m.footer(keys)
+}
+
+// viewTabs renders the tab bar; 1 and 2 jump straight to a tab.
+func (m *Model) viewTabs() string {
+	var parts []string
+	for i, name := range tabNames {
+		label := fmt.Sprintf(" %d %s (%d) ", i+1, name, m.entryCount(i))
+		if i == m.tab {
+			parts = append(parts, tabActiveStyle.Render(label))
+			continue
+		}
+		parts = append(parts, tabStyle.Render(label))
+	}
+	return lipgloss.JoinHorizontal(lipgloss.Bottom, parts...)
+}
+
+// summary flattens a function body to a single line for the list.
+func summary(body string) string {
+	for _, l := range strings.Split(body, "\n") {
+		if t := strings.TrimSpace(l); t != "" {
+			rest := ""
+			if strings.Count(strings.TrimSpace(body), "\n") > 0 {
+				rest = " …"
+			}
+			return t + rest
+		}
+	}
+	return ""
+}
+
+func (m *Model) viewFuncForm() string {
+	f := &m.fn
+	title := "New function"
+	switch {
+	case f.oldName != "":
+		title = "Edit function: " + f.oldName
+	case f.dupOf != "":
+		title = "Duplicate of: " + f.dupOf
+	}
+	group := aliasfile.Ungrouped
+	if len(f.groups) > 0 {
+		group = f.groups[f.groupIx]
+	}
+	state := okStyle.Render("enabled")
+	if !f.enabled {
+		state = errStyle.Render("disabled")
+	}
+
+	rows := []string{
+		field("name", f.name.View(), f.focus == gName),
+		field("body", "", f.focus == gBody),
+		f.body.View(),
+		field("comment", f.comment.View(), f.focus == gComment),
+		field("group", fmt.Sprintf("‹ %s ›", groupStyle.Render(group)), f.focus == gGroup),
+		field("state", state+helpStyle.Render("  (ctrl+e toggles)"), false),
+	}
+	body := boxStyle.Render(strings.Join(rows, "\n"))
+	out := titleStyle.Render(" "+title+" ") + "\n\n" + body + "\n"
+	if f.err != "" {
+		out += "\n" + errStyle.Render("✗ "+f.err) + "\n"
+	}
+	out += "\n" + helpStyle.Render("writes: ") + cmdStyle.Render(strings.TrimSpace(strings.SplitN(
+		(&aliasfile.Node{Name: strings.TrimSpace(f.name.Value()), Comment: strings.TrimSpace(f.comment.Value()), Enabled: f.enabled}).Lines(), "\n", 2)[0])) + "\n"
+	return out + m.footer("ctrl+n/ctrl+p field · tab indent (in body) · enter newline (in body) · ctrl+s save · ctrl+e enable/disable · esc cancel")
 }
 
 func (m *Model) viewAliasForm() string {
@@ -194,13 +276,15 @@ func (m *Model) viewGroupForm() string {
 func (m *Model) viewConfirm() string {
 	c := m.confirm
 	var q string
-	if c.target.kind == rowAlias {
+	if c.target.kind == rowFunc {
+		q = fmt.Sprintf("Delete function %s?\n%s", nameStyle.Render(c.target.node.Name+"()"), cmdStyle.Render(summary(c.target.node.Body)))
+	} else if c.target.kind == rowAlias {
 		q = fmt.Sprintf("Delete alias %s?\n%s", nameStyle.Render(c.target.node.Name), cmdStyle.Render(c.target.node.Command))
 	} else {
-		n := len(m.doc.Aliases(c.target.group))
-		opt := "keep its aliases (they move to Ungrouped)"
+		n := len(m.doc.Aliases(c.target.group)) + len(m.doc.Functions(c.target.group))
+		opt := "keep its entries (they move to Ungrouped)"
 		if c.withAliases {
-			opt = errStyle.Render("delete its " + fmt.Sprint(n) + " aliases too")
+			opt = errStyle.Render("delete its " + fmt.Sprint(n) + " entries too")
 		}
 		q = fmt.Sprintf("Delete group %s?\n%s\n%s", groupStyle.Render(c.target.group), opt, helpStyle.Render("space toggles"))
 	}
@@ -266,12 +350,17 @@ func (m *Model) viewHelp() string {
 	}
 	body := strings.Join([]string{
 		groupStyle.Render("Keys"),
-		"  ↑/↓ k/j    move            enter/tab  fold group / edit alias",
-		"  a          add alias       N          new group",
-		"  e          edit            c          duplicate alias",
+		"  ↑/↓ k/j    move            enter      fold group / edit entry",
+		"  1 / 2      aliases / functions tab     tab  next tab",
+		"  a          add entry       N          new group",
+		"  e          edit            c          duplicate entry",
 		"  d          delete          /          filter",
 		"  space      enable/disable",
-		"  m          move mode       (space select · enter pick group · esc cancel)",
+		"  m          move mode       (aliases tab · space select · enter pick group)",
+		"",
+		groupStyle.Render("Function editor"),
+		"  ctrl+n / ctrl+p next / previous field    tab  indent by 4 spaces",
+		"  enter inserts a newline in the body      ctrl+s  save",
 		"  r          reload file     s          settings",
 		"  q          quit            ?          this help",
 		"",
@@ -286,6 +375,7 @@ func (m *Model) viewHelp() string {
 		groupStyle.Render("File format"),
 		"  Groups are comments:   " + cmdStyle.Render("# ===== Git ====="),
 		"  Disabled aliases keep: " + cmdStyle.Render("#!alias gs='git status'"),
+		"  Functions are whole:   " + cmdStyle.Render("mkcd() { … }") + helpStyle.Render("  (disabled: every line gets #!)"),
 		"  A .bak of the previous file is kept next to it on every save.",
 	}, "\n")
 	return titleStyle.Render(" Help ") + "\n\n" + body + "\n" + m.footer("any key to go back")

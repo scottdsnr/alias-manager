@@ -32,6 +32,14 @@ const (
 	fieldCount
 )
 
+// openEntryForm opens the editor matching the node's kind.
+func (m *Model) openEntryForm(n *aliasfile.Node) (tea.Model, tea.Cmd) {
+	if n.Kind == aliasfile.KindFunc {
+		return m.openFuncForm(n)
+	}
+	return m.openAliasForm(n)
+}
+
 func (m *Model) openAliasForm(n *aliasfile.Node) (tea.Model, tea.Cmd) {
 	return m.openAliasFormWith(n, false)
 }
@@ -247,7 +255,10 @@ func (m *Model) updateConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "y", "enter":
 		var note string
-		if c.target.kind == rowAlias {
+		if c.target.kind == rowFunc {
+			m.doc.DeleteFunc(c.target.node.Name)
+			note = "deleted " + c.target.node.Name + "()"
+		} else if c.target.kind == rowAlias {
 			m.doc.Delete(c.target.node.Name)
 			note = "deleted " + c.target.node.Name
 		} else {

@@ -145,3 +145,95 @@ func TestValidateName(t *testing.T) {
 		}
 	}
 }
+
+const funcSample = `alias ll='ls -la'
+
+# ===== Git =====
+gsync() { # pull, then push
+    git pull --rebase
+    git push
+}
+
+#!stale() {
+#!    echo gone
+#!}
+
+if [ -n "$X" ]; then
+    echo not a function
+fi
+`
+
+func TestParseFunctionsAndRoundTrip(t *testing.T) {
+	d := load(t, funcSample)
+	if got := d.Render(); got != funcSample {
+		t.Fatalf("round trip changed file:\n--got--\n%s\n--want--\n%s", got, funcSample)
+	}
+	n := d.FindFunc("gsync")
+	if n == nil || !n.Enabled || n.Group != "Git" || n.Comment != "pull, then push" {
+		t.Fatalf("gsync = %+v", n)
+	}
+	if n.Body != "    git pull --rebase\n    git push" {
+		t.Fatalf("body = %q", n.Body)
+	}
+	if s := d.FindFunc("stale"); s == nil || s.Enabled {
+		t.Fatalf("stale = %+v", s)
+	}
+	if d.FindFunc("then") != nil || len(d.Functions("Git")) != 2 {
+		t.Fatalf("an if block was read as a function: %d", len(d.Functions("Git")))
+	}
+}
+
+func TestDisablingAFunctionCommentsEveryLine(t *testing.T) {
+	d := load(t, funcSample)
+	d.FindFunc("gsync").Enabled = false
+	out := d.Render()
+	for _, want := range []string{"#!gsync() { # pull, then push", "#!    git pull --rebase", "#!}"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("missing %q in:\n%s", want, out)
+		}
+	}
+	// And it must parse back to exactly the same function.
+	d2 := load(t, out)
+	n := d2.FindFunc("gsync")
+	if n == nil || n.Enabled || n.Body != "    git pull --rebase\n    git push" {
+		t.Fatalf("re-parsed = %+v", n)
+	}
+}
+
+func TestUpsertFuncValidatesAndPlacesInGroup(t *testing.T) {
+	d := load(t, funcSample)
+	if err := d.UpsertFunc("", Node{Name: "mkcd", Enabled: true, Group: "Git"}); err == nil {
+		t.Fatal("expected an empty-body error")
+	}
+	if err := d.UpsertFunc("", Node{Name: "2bad", Body: "echo x", Enabled: true}); err == nil {
+		t.Fatal("expected an invalid-name error")
+	}
+	if err := d.UpsertFunc("", Node{Name: "mkcd", Body: "    mkdir -p \"$1\"", Enabled: true, Group: "Git"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := d.UpsertFunc("", Node{Name: "mkcd", Body: "x", Enabled: true, Group: "Git"}); err == nil {
+		t.Fatal("expected a duplicate-name error")
+	}
+	if n := d.FindFunc("mkcd"); n == nil || n.Group != "Git" {
+		t.Fatalf("mkcd = %+v", n)
+	}
+	d.DeleteFunc("mkcd")
+	if d.FindFunc("mkcd") != nil {
+		t.Fatal("mkcd should be gone")
+	}
+}
+
+// An alias and a function may share a name without colliding.
+func TestAliasAndFunctionNamespacesAreSeparate(t *testing.T) {
+	d := load(t, funcSample)
+	if err := d.UpsertFunc("", Node{Name: "ll", Body: "    ls -la", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	if d.Find("ll") == nil || d.FindFunc("ll") == nil {
+		t.Fatal("both an alias and a function named ll should exist")
+	}
+	d.DeleteFunc("ll")
+	if d.Find("ll") == nil {
+		t.Fatal("deleting the function removed the alias")
+	}
+}

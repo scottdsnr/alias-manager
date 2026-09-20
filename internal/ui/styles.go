@@ -33,6 +33,11 @@ var (
 	okStyle       = lipgloss.NewStyle().Foreground(colOK)
 	labelStyle    = lipgloss.NewStyle().Foreground(colMuted).Width(10)
 	boxStyle      lipgloss.Style
+
+	// Tab bar: the active tab is underlined in the accent colour, the
+	// inactive ones sit back in the muted grey.
+	tabStyle       = lipgloss.NewStyle().Foreground(colMuted)
+	tabActiveStyle lipgloss.Style
 )
 
 func init() { applyColor(DefaultColor) }
@@ -49,6 +54,7 @@ func applyColor(name string) {
 	groupStyle = lipgloss.NewStyle().Bold(true).Foreground(colAccent)
 	cursorStyle = lipgloss.NewStyle().Foreground(colAccent).Bold(true)
 	boxStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(colAccent).Padding(0, 1)
+	tabActiveStyle = lipgloss.NewStyle().Bold(true).Foreground(colAccent).Underline(true)
 }
 
 // ValidColor reports whether name is one of the offered colours.

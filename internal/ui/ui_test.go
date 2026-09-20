@@ -55,6 +55,12 @@ func key(m *Model, s string) *Model {
 		msg = tea.KeyMsg{Type: tea.KeyRight}
 	case "esc":
 		msg = tea.KeyMsg{Type: tea.KeyEsc}
+	case "ctrl+s":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlS}
+	case "ctrl+n":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlN}
+	case "ctrl+e":
+		msg = tea.KeyMsg{Type: tea.KeyCtrlE}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -68,7 +74,7 @@ func key(m *Model, s string) *Model {
 
 // saveKeys are the keys that trigger a write, and so the only ones whose
 // command is worth running in tests.
-var saveKeys = map[string]bool{"enter": true, "space": true, "y": true}
+var saveKeys = map[string]bool{"enter": true, "space": true, "y": true, "ctrl+s": true}
 
 // drain runs a returned command the way the bubbletea runtime would, so that
 // asynchronous work (saving and sourcing the file) lands before we assert.
@@ -381,4 +387,112 @@ func TestSettingsEscRevertsColorPreview(t *testing.T) {
 		t.Fatal("esc should revert the preview to the saved colour")
 	}
 	applyColor(DefaultColor)
+}
+
+const funcFixture = "# ===== Git =====\nalias gs='git status'\n\ngsync() { # pull, then push\n    git pull --rebase\n    git push\n}\n"
+
+func TestTabKeysSwitchBetweenAliasesAndFunctions(t *testing.T) {
+	m := newTestModel(t, funcFixture)
+	if !strings.Contains(m.View(), "git status") {
+		t.Fatal("aliases tab should list aliases")
+	}
+	m = key(m, "2")
+	if m.tab != tabFuncs {
+		t.Fatalf("tab = %d", m.tab)
+	}
+	v := m.View()
+	if !strings.Contains(v, "gsync()") || strings.Contains(v, "git status") {
+		t.Fatalf("functions tab wrong:\n%s", v)
+	}
+	m = key(m, "1")
+	if m.tab != tabAliases || !strings.Contains(m.View(), "git status") {
+		t.Fatalf("did not return to aliases:\n%s", m.View())
+	}
+}
+
+func TestCreateFunctionWritesFile(t *testing.T) {
+	m := newTestModel(t, funcFixture)
+	m = key(m, "2")
+	m = key(m, "a")
+	m = typ(m, "mkcd")
+	m = key(m, "ctrl+n") // into the body
+	m = typ(m, "mkdir -p x")
+	m = key(m, "ctrl+s")
+	if m.screen != screenList {
+		t.Fatalf("form still open: %s", m.fn.err)
+	}
+	n := m.doc.FindFunc("mkcd")
+	if n == nil || !strings.Contains(n.Body, "mkdir -p x") {
+		t.Fatalf("function not added: %+v", n)
+	}
+	b, _ := os.ReadFile(m.cfg.AliasFile)
+	if !strings.Contains(string(b), "mkcd() {\n    mkdir -p x\n}") {
+		t.Fatalf("file:\n%s", b)
+	}
+}
+
+func TestFunctionBodyTakesNewlinesAndTabs(t *testing.T) {
+	m := newTestModel(t, funcFixture)
+	m = key(m, "2")
+	m = key(m, "a")
+	m = typ(m, "two")
+	m = key(m, "ctrl+n")
+	m = typ(m, "echo one")
+	m = key(m, "enter") // newline inside the body, not a save
+	if m.screen != screenFunc {
+		t.Fatal("enter in the body should not submit the form")
+	}
+	m = key(m, "tab") // indent by four spaces
+	m = typ(m, "echo two")
+	m = key(m, "ctrl+s")
+	n := m.doc.FindFunc("two")
+	if n == nil {
+		t.Fatalf("not created: %s", m.fn.err)
+	}
+	if n.Body != "    echo one\n    echo two" {
+		t.Fatalf("body = %q", n.Body)
+	}
+}
+
+func TestToggleAndDeleteFunction(t *testing.T) {
+	m := newTestModel(t, funcFixture)
+	m = key(m, "2")
+	m = key(m, "down") // onto gsync
+	m = key(m, "space")
+	if m.doc.FindFunc("gsync").Enabled {
+		t.Fatal("gsync should be disabled")
+	}
+	b, _ := os.ReadFile(m.cfg.AliasFile)
+	if !strings.Contains(string(b), "#!gsync() {") || !strings.Contains(string(b), "#!    git push") {
+		t.Fatalf("file:\n%s", b)
+	}
+	// Disabling must queue an unset -f so the live shell drops it too.
+	if !m.staleFn["gsync"] {
+		t.Fatal("expected gsync to be marked stale")
+	}
+	m = key(m, "d")
+	m = key(m, "y")
+	if m.doc.FindFunc("gsync") != nil {
+		t.Fatal("gsync should be deleted")
+	}
+}
+
+func TestEditFunctionKeepsCommentAndGroup(t *testing.T) {
+	m := newTestModel(t, funcFixture)
+	m = key(m, "2")
+	m = key(m, "down")
+	m = key(m, "e")
+	if m.screen != screenFunc || m.fn.oldName != "gsync" {
+		t.Fatalf("edit did not open: screen=%v", m.screen)
+	}
+	m = key(m, "ctrl+n")
+	m = typ(m, "echo done")
+	m = key(m, "ctrl+s")
+	n := m.doc.FindFunc("gsync")
+	if n == nil || n.Comment != "pull, then push" || n.Group != "Git" {
+		t.Fatalf("gsync = %+v", n)
+	}
+	if !strings.Contains(n.Body, "echo done") {
+		t.Fatalf("body = %q", n.Body)
+	}
 }

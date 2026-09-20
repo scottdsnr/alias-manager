@@ -44,6 +44,9 @@ as `~/.oh-my-zsh/custom/aliases.zsh`. Files found on your machine are listed;
 `ctrl+n` cycles through them. Settings are reachable later with `s`, or
 `alias-manager -setup`, and are stored in `~/.config/alias-manager/config.json`.
 
+Settings also carries the UI accent colour — `←`/`→` cycles teal, green,
+magenta, yellow and purple, previewing as you go.
+
 `source` is a second path, used only if the file you edit is not the file that
 should be loaded (e.g. you edit an oh-my-zsh plugin but want `.zshrc` sourced).
 Leave it blank to use the alias file.

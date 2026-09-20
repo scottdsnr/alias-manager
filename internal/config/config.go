@@ -17,6 +17,8 @@ type Config struct {
 	SourceFile string `json:"source_file"`
 	// Shell is "bash" or "zsh"; used to validate and source.
 	Shell string `json:"shell"`
+	// Color names the UI accent colour. Empty means the UI default.
+	Color string `json:"color"`
 
 	path string
 }

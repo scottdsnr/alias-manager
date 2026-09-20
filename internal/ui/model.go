@@ -76,6 +76,7 @@ type Model struct {
 
 // New builds the model. firstRun forces the settings screen.
 func New(cfg *config.Config, firstRun bool) (*Model, error) {
+	applyColor(cfg.Color)
 	m := &Model{cfg: cfg, collapse: map[string]bool{}, stale: map[string]bool{}, selected: map[string]bool{}, screen: screenList}
 	f := textinput.New()
 	f.Prompt = "/"

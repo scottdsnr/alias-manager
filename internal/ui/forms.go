@@ -275,6 +275,7 @@ type settingsForm struct {
 	inputs  []textinput.Model // alias file, source file
 	focus   int
 	shell   string
+	color   string
 	first   bool
 	suggest []string
 	suggIx  int
@@ -285,6 +286,7 @@ const (
 	sAliasFile = iota
 	sSourceFile
 	sShell
+	sColor
 	sFieldCount
 )
 
@@ -300,11 +302,15 @@ func newSettingsForm(cfg *config.Config, first bool) settingsForm {
 	f := settingsForm{
 		inputs:  []textinput.Model{mk("~/.bash_aliases", cfg.AliasFile), mk("leave blank to use the alias file", cfg.SourceFile)},
 		shell:   cfg.Shell,
+		color:   cfg.Color,
 		first:   first,
 		suggest: config.Candidates(),
 	}
 	if f.shell == "" {
 		f.shell = config.DetectShell()
+	}
+	if !ValidColor(f.color) {
+		f.color = DefaultColor
 	}
 	f.inputs[0].Focus()
 	return f
@@ -318,6 +324,8 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.quit = true
 			return m, tea.Quit
 		}
+		// Undo any live colour preview that was never saved.
+		applyColor(m.cfg.Color)
 		m.screen = screenList
 		return m, nil
 	case "ctrl+c":
@@ -334,6 +342,16 @@ func (m *Model) updateSettings(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			} else {
 				f.shell = "zsh"
 			}
+			return m, nil
+		}
+		if f.focus == sColor {
+			step := 1
+			if msg.String() == "left" {
+				step = -1
+			}
+			f.color = Colors[(indexOf(Colors, f.color)+step+len(Colors))%len(Colors)]
+			// Preview immediately so the choice is visible while cycling.
+			applyColor(f.color)
 			return m, nil
 		}
 	case "ctrl+n":
@@ -376,7 +394,8 @@ func (m *Model) submitSettings() (tea.Model, tea.Cmd) {
 	if src == "" {
 		src = path
 	}
-	m.cfg.AliasFile, m.cfg.SourceFile, m.cfg.Shell = path, src, f.shell
+	m.cfg.AliasFile, m.cfg.SourceFile, m.cfg.Shell, m.cfg.Color = path, src, f.shell, f.color
+	applyColor(f.color)
 	if err := m.cfg.Save(); err != nil {
 		f.err = err.Error()
 		return m, nil

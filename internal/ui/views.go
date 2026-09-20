@@ -242,6 +242,7 @@ func (m *Model) viewSettings() string {
 		field("alias file", f.inputs[sAliasFile].View(), f.focus == sAliasFile),
 		field("source", src, f.focus == sSourceFile),
 		field("shell", fmt.Sprintf("‹ %s ›", groupStyle.Render(f.shell)), f.focus == sShell),
+		field("colour", fmt.Sprintf("‹ %s ›", groupStyle.Render(f.color)), f.focus == sColor),
 	}
 	out := titleStyle.Render(head) + "\n\n" + intro + boxStyle.Render(strings.Join(rows, "\n")) + "\n"
 
@@ -255,7 +256,7 @@ func (m *Model) viewSettings() string {
 	if f.err != "" {
 		out += "\n" + errStyle.Render("✗ "+f.err) + "\n"
 	}
-	return out + m.footer("tab next field · ←→ switch shell · ctrl+n suggestion · enter save · esc back")
+	return out + m.footer("tab next field · ←→ change shell/colour · ctrl+n suggestion · enter save · esc back")
 }
 
 func (m *Model) viewHelp() string {

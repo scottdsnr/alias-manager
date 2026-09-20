@@ -49,6 +49,12 @@ func key(m *Model, s string) *Model {
 		msg = tea.KeyMsg{Type: tea.KeyDown}
 	case "space":
 		msg = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+	case "left":
+		msg = tea.KeyMsg{Type: tea.KeyLeft}
+	case "right":
+		msg = tea.KeyMsg{Type: tea.KeyRight}
+	case "esc":
+		msg = tea.KeyMsg{Type: tea.KeyEsc}
 	default:
 		msg = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune(s)}
 	}
@@ -330,4 +336,49 @@ func TestDuplicateNameAvoidsCollisions(t *testing.T) {
 	if got := m.copyName("gs"); got != "gs-copy-2" {
 		t.Fatalf("copyName = %q", got)
 	}
+}
+
+func TestSettingsCyclesAndSavesColor(t *testing.T) {
+	m := newTestModel(t, "alias ll='ls -l'\n")
+	m.screen = screenSettings
+	m.settings = newSettingsForm(m.cfg, false)
+	if m.settings.color != DefaultColor {
+		t.Fatalf("want default colour, got %q", m.settings.color)
+	}
+	m.settings.focus = sColor
+	key(m, "right")
+	if m.settings.color != Colors[1] {
+		t.Fatalf("want %q, got %q", Colors[1], m.settings.color)
+	}
+	key(m, "left")
+	key(m, "left")
+	want := Colors[len(Colors)-1]
+	if m.settings.color != want {
+		t.Fatalf("want wrap to %q, got %q", want, m.settings.color)
+	}
+	if _, _ = m.submitSettings(); m.settings.err != "" {
+		t.Fatalf("save failed: %s", m.settings.err)
+	}
+	if m.cfg.Color != want {
+		t.Fatalf("config colour %q, want %q", m.cfg.Color, want)
+	}
+	if colAccent != accents[want] {
+		t.Fatal("accent style not applied")
+	}
+	applyColor(DefaultColor)
+}
+
+func TestSettingsEscRevertsColorPreview(t *testing.T) {
+	m := newTestModel(t, "alias ll='ls -l'\n")
+	m.cfg.Color = "green"
+	applyColor(m.cfg.Color)
+	m.screen = screenSettings
+	m.settings = newSettingsForm(m.cfg, false)
+	m.settings.focus = sColor
+	key(m, "right")
+	key(m, "esc")
+	if colAccent != accents["green"] {
+		t.Fatal("esc should revert the preview to the saved colour")
+	}
+	applyColor(DefaultColor)
 }

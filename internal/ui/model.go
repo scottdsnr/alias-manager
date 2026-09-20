@@ -331,6 +331,10 @@ func (m *Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m.openGroupForm(r.group)
 		}
+	case "c":
+		if r := m.currentRow(); r != nil && r.kind == rowAlias {
+			return m.openDuplicateForm(r.node)
+		}
 	case "N":
 		return m.openGroupForm("")
 	case " ":

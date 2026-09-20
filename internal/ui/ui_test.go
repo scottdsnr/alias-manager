@@ -303,3 +303,31 @@ func TestMoveModeGroupHeaderSelectsWholeGroup(t *testing.T) {
 		t.Fatalf("want selection cleared, got %v", m.selected)
 	}
 }
+
+func TestDuplicateAliasKeepsOriginal(t *testing.T) {
+	m := newTestModel(t, fixture)
+	m = key(m, "down") // onto gs
+	m = key(m, "c")
+	if m.screen != screenAlias || m.alias.dupOf != "gs" {
+		t.Fatalf("duplicate form not open: %+v", m.alias)
+	}
+	if got := m.alias.inputs[fName].Value(); got != "gs-copy" {
+		t.Fatalf("suggested name = %q", got)
+	}
+	m = key(m, "enter")
+	orig, dup := m.doc.Find("gs"), m.doc.Find("gs-copy")
+	if orig == nil || dup == nil || dup.Command != orig.Command || dup.Group != orig.Group {
+		t.Fatalf("orig=%+v dup=%+v", orig, dup)
+	}
+	b, _ := os.ReadFile(m.cfg.AliasFile)
+	if !strings.Contains(string(b), "alias gs-copy='git status'") {
+		t.Fatalf("file:\n%s", b)
+	}
+}
+
+func TestDuplicateNameAvoidsCollisions(t *testing.T) {
+	m := newTestModel(t, fixture+"alias gs-copy='git status'\n")
+	if got := m.copyName("gs"); got != "gs-copy-2" {
+		t.Fatalf("copyName = %q", got)
+	}
+}

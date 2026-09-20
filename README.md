@@ -57,6 +57,7 @@ Leave it blank to use the alias file.
 | `a` | add alias |
 | `N` | new group |
 | `e` | edit alias or rename group |
+| `c` | duplicate an alias (opens the edit screen pre-filled) |
 | `d` | delete (with confirmation) |
 | `space` | enable/disable alias |
 | `m` | move mode: `space` select (on a group header, the whole group), `a` select all, `enter` pick destination group, `esc` cancel |

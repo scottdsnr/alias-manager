@@ -140,14 +140,17 @@ func (m *Model) viewList() string {
 	if m.moving {
 		return b.String() + m.footer(fmt.Sprintf("move mode · %d selected · space select · a select all · enter choose group · esc cancel", len(m.selected)))
 	}
-	return b.String() + m.footer("↑↓ move · enter fold/edit · a add · N new group · e edit · space on/off · d delete · / filter · m move · s settings · ? help · q quit")
+	return b.String() + m.footer("↑↓ move · enter fold/edit · a add · N new group · e edit · c duplicate · space on/off · d delete · / filter · m move · s settings · ? help · q quit")
 }
 
 func (m *Model) viewAliasForm() string {
 	f := &m.alias
 	title := "New alias"
-	if f.oldName != "" {
+	switch {
+	case f.oldName != "":
 		title = "Edit alias: " + f.oldName
+	case f.dupOf != "":
+		title = "Duplicate of: " + f.dupOf
 	}
 	group := aliasfile.Ungrouped
 	if len(f.groups) > 0 {
@@ -264,8 +267,9 @@ func (m *Model) viewHelp() string {
 		groupStyle.Render("Keys"),
 		"  ↑/↓ k/j    move            enter/tab  fold group / edit alias",
 		"  a          add alias       N          new group",
-		"  e          edit            d          delete",
-		"  space      enable/disable  /          filter",
+		"  e          edit            c          duplicate alias",
+		"  d          delete          /          filter",
+		"  space      enable/disable",
 		"  m          move mode       (space select · enter pick group · esc cancel)",
 		"  r          reload file     s          settings",
 		"  q          quit            ?          this help",

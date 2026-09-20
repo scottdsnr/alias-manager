@@ -19,6 +19,7 @@ type aliasForm struct {
 	groups  []string
 	groupIx int
 	oldName string
+	dupOf   string
 	enabled bool
 	err     string
 }
@@ -32,6 +33,16 @@ const (
 )
 
 func (m *Model) openAliasForm(n *aliasfile.Node) (tea.Model, tea.Cmd) {
+	return m.openAliasFormWith(n, false)
+}
+
+// openDuplicateForm opens the edit screen pre-filled from n but detached from
+// it, so submitting creates a second alias instead of renaming the original.
+func (m *Model) openDuplicateForm(n *aliasfile.Node) (tea.Model, tea.Cmd) {
+	return m.openAliasFormWith(n, true)
+}
+
+func (m *Model) openAliasFormWith(n *aliasfile.Node, dup bool) (tea.Model, tea.Cmd) {
 	f := aliasForm{groups: m.groupNames(), enabled: true}
 	mk := func(placeholder, val string, limit int) textinput.Model {
 		t := textinput.New()
@@ -42,10 +53,16 @@ func (m *Model) openAliasForm(n *aliasfile.Node) (tea.Model, tea.Cmd) {
 		return t
 	}
 	if n != nil {
-		f.oldName = n.Name
+		name := n.Name
+		if dup {
+			f.dupOf = n.Name
+			name = m.copyName(n.Name)
+		} else {
+			f.oldName = n.Name
+		}
 		f.enabled = n.Enabled
 		f.inputs = []textinput.Model{
-			mk("gs", n.Name, 64),
+			mk("gs", name, 64),
 			mk("git status", n.Command, 1024),
 			mk("optional note", n.Comment, 128),
 		}
@@ -65,6 +82,7 @@ func (m *Model) openAliasForm(n *aliasfile.Node) (tea.Model, tea.Cmd) {
 		}
 	}
 	f.inputs[0].Focus()
+	f.inputs[0].CursorEnd()
 	m.alias = f
 	m.screen = screenAlias
 	return m, textinput.Blink
@@ -126,12 +144,30 @@ func (m *Model) submitAlias() (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	verb := "created"
-	if f.oldName != "" {
+	switch {
+	case f.oldName != "":
 		verb = "updated"
+	case f.dupOf != "":
+		verb = "duplicated " + f.dupOf + " as"
 	}
 	m.screen = screenList
 	m.rebuild()
 	return m, m.save(fmt.Sprintf("%s %s", verb, n.Name))
+}
+
+// copyName suggests a free name for a duplicate: gs -> gs-copy, gs-copy-2, ...
+func (m *Model) copyName(name string) string {
+	taken := map[string]bool{}
+	for _, n := range m.doc.Nodes {
+		if n.Kind == aliasfile.KindAlias {
+			taken[n.Name] = true
+		}
+	}
+	cand := name + "-copy"
+	for i := 2; taken[cand]; i++ {
+		cand = fmt.Sprintf("%s-copy-%d", name, i)
+	}
+	return cand
 }
 
 // ---------- group form ----------
